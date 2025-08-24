@@ -65,18 +65,6 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           nix build -L --impure .#packages.${{ matrix.system }}.docker
-      - name: Build the docker image pusher
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          nix build -L --impure .#packages.${{ matrix.system }}.push-docker-image
-      - name: Push the docker image
-        env:
-          DOCKER_IMAGE_TAGS: ${{ needs.docker-meta.outputs.tags }}
-        shell: bash
-        run: |
-          ./result
   docker-manifest:
     runs-on: ubuntu-24.04
     needs: [docker-meta, docker-images]
@@ -99,12 +87,4 @@ jobs:
             done
 
             docker manifest create $tag ${imgs[*]}
-          done
-      - name: Push the docker image
-        env:
-          DOCKER_IMAGE_TAGS: ${{ needs.docker-meta.outputs.tags }}
-        shell: bash
-        run: |
-          for tag in $DOCKER_IMAGE_TAGS; do
-            docker manifest push $tag
           done
