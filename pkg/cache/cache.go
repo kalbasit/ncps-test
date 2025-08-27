@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kalbasit/ncps/pkg/cache/healthcheck"
@@ -28,6 +29,11 @@ import (
 	"github.com/kalbasit/ncps/pkg/database"
 	"github.com/kalbasit/ncps/pkg/nar"
 	"github.com/kalbasit/ncps/pkg/storage"
+)
+
+const (
+	recordAgeIgnoreTouch = 5 * time.Minute
+	otelPackageName      = "github.com/kalbasit/ncps/pkg/cache"
 )
 
 var (
@@ -45,12 +51,45 @@ var (
 
 	// errNarInfoPurged is returned if the narinfo was purged.
 	errNarInfoPurged = errors.New("the narinfo was purged")
+
+	//nolint:gochecknoglobals
+	meter metric.Meter
+
+	//nolint:gochecknoglobals
+	tracer trace.Tracer
+
+	//nolint:gochecknoglobals
+	narServedCount metric.Int64Counter
+
+	//nolint:gochecknoglobals
+	narInfoServedCount metric.Int64Counter
 )
 
-const (
-	recordAgeIgnoreTouch = 5 * time.Minute
-	tracerName           = "github.com/kalbasit/ncps/pkg/cache"
-)
+//nolint:gochecknoinits
+func init() {
+	meter = otel.Meter(otelPackageName)
+	tracer = otel.Tracer(otelPackageName)
+
+	var err error
+
+	narServedCount, err = meter.Int64Counter(
+		"ncps_nar_served_total",
+		metric.WithDescription("Counts the number of NAR files served."),
+		metric.WithUnit("{file}"),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	narInfoServedCount, err = meter.Int64Counter(
+		"ncps_narinfo_served_total",
+		metric.WithDescription("Counts the number of NAR info files served."),
+		metric.WithUnit("{file}"),
+	)
+	if err != nil {
+		panic(err)
+	}
+}
 
 // Cache represents the main cache service.
 type Cache struct {
@@ -65,9 +104,6 @@ type Cache struct {
 
 	// tempDir is used to store nar files temporarily.
 	tempDir string
-
-	tracer trace.Tracer
-
 	// stores
 	configStore  storage.ConfigStore
 	narInfoStore storage.NarInfoStore
@@ -137,7 +173,6 @@ func New(
 	c := &Cache{
 		baseContext:          ctx,
 		db:                   db,
-		tracer:               otel.Tracer(tracerName),
 		configStore:          configStore,
 		narInfoStore:         narInfoStore,
 		narStore:             narStore,
@@ -250,7 +285,7 @@ func (c *Cache) PublicKey() signature.PublicKey { return c.secretKey.ToPublicKey
 // stored and finally returned.
 // NOTE: It's the caller responsibility to close the body.
 func (c *Cache) GetNar(ctx context.Context, narURL nar.URL) (int64, io.ReadCloser, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.GetNar",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -260,6 +295,11 @@ func (c *Cache) GetNar(ctx context.Context, narURL nar.URL) (int64, io.ReadClose
 	)
 	defer span.End()
 
+	var metricAttrs []attribute.KeyValue
+	defer func() {
+		narServedCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
+	}()
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -268,7 +308,17 @@ func (c *Cache) GetNar(ctx context.Context, narURL nar.URL) (int64, io.ReadClose
 		WithContext(ctx)
 
 	if c.narStore.HasNar(ctx, narURL) {
-		return c.getNarFromStore(ctx, &narURL)
+		metricAttrs = append(metricAttrs,
+			attribute.String("result", "hit"),
+			attribute.String("status", "success"),
+		)
+
+		size, reader, err := c.getNarFromStore(ctx, &narURL)
+		if err != nil {
+			metricAttrs = append(metricAttrs, attribute.String("status", "error"))
+		}
+
+		return size, reader, err
 	}
 
 	zerolog.Ctx(ctx).
@@ -290,12 +340,29 @@ func (c *Cache) GetNar(ctx context.Context, narURL nar.URL) (int64, io.ReadClose
 	if c.narStore.HasNar(ctx, narURL) {
 		ds.wg.Done()
 
-		return c.getNarFromStore(ctx, &narURL)
+		metricAttrs = append(metricAttrs,
+			attribute.String("result", "hit"),
+			attribute.String("status", "success"),
+		)
+
+		size, reader, err := c.getNarFromStore(ctx, &narURL)
+		if err != nil {
+			metricAttrs = append(metricAttrs, attribute.String("status", "error"))
+		}
+
+		return size, reader, err
 	}
+
+	metricAttrs = append(metricAttrs,
+		attribute.String("result", "miss"),
+		attribute.String("status", "success"),
+	)
 
 	<-ds.start
 
 	if ds.downloadError != nil {
+		metricAttrs = append(metricAttrs, attribute.String("status", "error"))
+
 		return 0, nil, ds.downloadError
 	}
 
@@ -375,7 +442,7 @@ func (c *Cache) GetNar(ctx context.Context, narURL nar.URL) (int64, io.ReadClose
 
 // PutNar records the NAR (given as an io.Reader) into the store.
 func (c *Cache) PutNar(ctx context.Context, narURL nar.URL, r io.ReadCloser) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.PutNar",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -406,7 +473,7 @@ func (c *Cache) PutNar(ctx context.Context, narURL nar.URL, r io.ReadCloser) err
 
 // DeleteNar deletes the nar from the store.
 func (c *Cache) DeleteNar(ctx context.Context, narURL nar.URL) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.DeleteNar",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -452,7 +519,7 @@ func (c *Cache) pullNarIntoStore(
 		ds.cond.Broadcast()
 	}()
 
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.pullNar",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -612,7 +679,7 @@ func (c *Cache) getNarFromStore(
 	ctx context.Context,
 	narURL *nar.URL,
 ) (int64, io.ReadCloser, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.getNarFromStore",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -624,7 +691,7 @@ func (c *Cache) getNarFromStore(
 
 	size, r, err := c.narStore.GetNar(ctx, *narURL)
 	if err != nil {
-		return 0, nil, fmt.Errorf("error fetching the narinfo from the store: %w", err)
+		return 0, nil, fmt.Errorf("error fetching the nar from the store: %w", err)
 	}
 
 	tx, err := c.db.DB().Begin()
@@ -673,7 +740,7 @@ func (c *Cache) getNarFromUpstream(
 	narInfo *narinfo.NarInfo,
 	enableZSTD bool,
 ) (*http.Response, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.getNarFromUpstream",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -755,7 +822,7 @@ func (c *Cache) deleteNarFromStore(ctx context.Context, narURL *nar.URL) error {
 // is not found in the store, it's pulled from an upstream, stored in the
 // stored and finally returned.
 func (c *Cache) GetNarInfo(ctx context.Context, hash string) (*narinfo.NarInfo, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.GetNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -764,6 +831,11 @@ func (c *Cache) GetNarInfo(ctx context.Context, hash string) (*narinfo.NarInfo, 
 		),
 	)
 	defer span.End()
+
+	var metricAttrs []attribute.KeyValue
+	defer func() {
+		narInfoServedCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
+	}()
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -780,13 +852,25 @@ func (c *Cache) GetNarInfo(ctx context.Context, hash string) (*narinfo.NarInfo, 
 	)
 
 	if c.narInfoStore.HasNarInfo(ctx, hash) {
+		metricAttrs = append(metricAttrs,
+			attribute.String("result", "hit"),
+			attribute.String("status", "success"),
+		)
+
 		narInfo, err = c.getNarInfoFromStore(ctx, hash)
 		if err == nil {
 			return narInfo, nil
 		} else if !errors.Is(err, errNarInfoPurged) {
+			metricAttrs = append(metricAttrs, attribute.String("status", "error"))
+
 			return nil, fmt.Errorf("error fetching the narinfo from the store: %w", err)
 		}
 	}
+
+	metricAttrs = append(metricAttrs,
+		attribute.String("result", "miss"),
+		attribute.String("status", "success"),
+	)
 
 	ds := c.prePullNarInfo(ctx, hash)
 
@@ -796,6 +880,8 @@ func (c *Cache) GetNarInfo(ctx context.Context, hash string) (*narinfo.NarInfo, 
 	<-ds.done
 
 	if ds.downloadError != nil {
+		metricAttrs = append(metricAttrs, attribute.String("status", "error"))
+
 		return nil, ds.downloadError
 	}
 
@@ -817,7 +903,7 @@ func (c *Cache) pullNarInfo(
 
 	defer done()
 
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.pullNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -938,7 +1024,7 @@ func (c *Cache) pullNarInfo(
 
 // PutNarInfo records the narInfo (given as an io.Reader) into the store and signs it.
 func (c *Cache) PutNarInfo(ctx context.Context, hash string, r io.ReadCloser) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.PutNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -982,7 +1068,7 @@ func (c *Cache) PutNarInfo(ctx context.Context, hash string, r io.ReadCloser) er
 
 // DeleteNarInfo deletes the narInfo from the store.
 func (c *Cache) DeleteNarInfo(ctx context.Context, hash string) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.DeleteNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1005,7 +1091,7 @@ func (c *Cache) DeleteNarInfo(ctx context.Context, hash string) error {
 }
 
 func (c *Cache) prePullNarInfo(ctx context.Context, hash string) *downloadState {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.prePullNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1037,7 +1123,7 @@ func (c *Cache) prePullNar(
 	narInfo *narinfo.NarInfo,
 	enableZSTD bool,
 ) *downloadState {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.prePullNar",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1067,7 +1153,7 @@ func (c *Cache) signNarInfo(ctx context.Context, hash string, narInfo *narinfo.N
 		return nil
 	}
 
-	_, span := c.tracer.Start(
+	_, span := tracer.Start(
 		ctx,
 		"cache.signNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1098,7 +1184,7 @@ func (c *Cache) signNarInfo(ctx context.Context, hash string, narInfo *narinfo.N
 }
 
 func (c *Cache) getNarInfoFromStore(ctx context.Context, hash string) (*narinfo.NarInfo, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.getNarInfoFromStore",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1191,7 +1277,7 @@ func (c *Cache) getNarInfoFromUpstream(
 	ctx context.Context,
 	hash string,
 ) (*upstream.Cache, *narinfo.NarInfo, error) {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.getNarInfoFromUpstream",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1236,7 +1322,7 @@ func (c *Cache) purgeNarInfo(
 	hash string,
 	narURL *nar.URL,
 ) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.purgeNarInfo",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1299,7 +1385,7 @@ func (c *Cache) storeInDatabase(
 	hash string,
 	narInfo *narinfo.NarInfo,
 ) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.storeInDatabase",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -1374,7 +1460,7 @@ func (c *Cache) storeInDatabase(
 }
 
 func (c *Cache) deleteNarInfoFromStore(ctx context.Context, hash string) error {
-	ctx, span := c.tracer.Start(
+	ctx, span := tracer.Start(
 		ctx,
 		"cache.deleteNarInfoFromStore",
 		trace.WithSpanKind(trace.SpanKindInternal),
