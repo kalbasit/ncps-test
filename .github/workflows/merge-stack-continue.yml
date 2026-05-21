@@ -119,9 +119,15 @@ jobs:
         if: steps.chain.outputs.found == 'true'
         run: |
           set -euo pipefail
-          # actions/checkout wiped /tmp on a fresh runner? No — /tmp survives.
+          # The top branch is already checked out by actions/checkout and is
+          # therefore at the right SHA — skip it. Fetching into a checked-out
+          # branch via the `src:dst` refspec form fails with `refusing to
+          # fetch into branch ... checked out at ...`.
+          current="$(git branch --show-current)"
           while IFS=$'\t' read -r head _base; do
-            # `head:head` creates/updates a local branch at the remote SHA.
+            if [[ "$head" == "$current" ]]; then
+              continue
+            fi
             git fetch origin "$head:$head"
           done < /tmp/chain.tsv
       - name: Bootstrap gs metadata, restack, submit
