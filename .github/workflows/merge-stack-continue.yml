@@ -25,12 +25,19 @@ jobs:
     steps:
       - name: Compute remaining labeled chain (bottom→top)
         id: chain
+        env:
+          MERGED_PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGED_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          # Pull all open PRs that still carry the label.
+          # Explicitly exclude the just-merged PR. `--state open` should
+          # already filter it out, but GitHub's API can briefly report a
+          # merged PR as still open due to eventual consistency, and that
+          # was breaking the chain walk below.
           gh pr list --repo "$REPO" --state open --label merge-stack \
             --json number,headRefName,baseRefName \
-            -q '.[] | [.number, .headRefName, .baseRefName] | @tsv' > /tmp/labeled.tsv
+            -q ".[] | select(.number != $MERGED_PR_NUMBER and .headRefName != \"$MERGED_HEAD_REF\") | [.number, .headRefName, .baseRefName] | @tsv" \
+            > /tmp/labeled.tsv
 
           if [[ ! -s /tmp/labeled.tsv ]]; then
             echo "No remaining merge-stack PRs; nothing to do."
@@ -55,6 +62,12 @@ jobs:
             fi
           done
 
+          if [[ -z "$bottom_head" ]]; then
+            echo "::error::Could not find a bottom of the labeled chain (cycle?). labeled.tsv:"
+            cat /tmp/labeled.tsv
+            exit 1
+          fi
+
           # Walk bottom→top, emitting "<head>\t<base>" per row.
           : > /tmp/chain.tsv
           cur="$bottom_head"
@@ -71,6 +84,11 @@ jobs:
             done
             cur="$next"
           done
+
+          if [[ -z "$top_head" ]]; then
+            echo "::error::Chain walk produced an empty top_head."
+            exit 1
+          fi
 
           {
             echo "found=true"
