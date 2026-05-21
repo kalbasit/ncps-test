@@ -73,7 +73,7 @@ Your cache will be available at `http://localhost:8501`. See the [Quick Start Gu
 ## Installation Methods
 
 | Method | Best For | Documentation |
-| ------------------ | ------------------------------------- | ----------------------------------------------------------- |
+| ------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------- |
 | **Docker** | Quick setup, single-instance | [Docker Guide](https://docs.ncps.dev/user-guide/installation/docker.html) |
 | **Docker Compose** | Automated setup with dependencies | [Docker Compose Guide](https://docs.ncps.dev/user-guide/installation/docker-compose.html) |
 | **Kubernetes** | Production, manual K8s deployment | [Kubernetes Guide](https://docs.ncps.dev/user-guide/installation/kubernetes.html) |
@@ -110,20 +110,3 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 ______________________________________________________________________
 
 [Report Bug](https://github.com/kalbasit/ncps/issues) • [Request Feature](https://github.com/kalbasit/ncps/issues) • [Discussions](https://github.com/kalbasit/ncps/discussions) • [Sponsor](https://github.com/sponsors/kalbasit)
-11
-22
-33
-44
-55
-66
-100
-101
-102
-103
-104
-105
-106
-107
-108
-109
-110
