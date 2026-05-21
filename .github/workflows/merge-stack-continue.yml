@@ -188,8 +188,18 @@ jobs:
           new_bottom="$(gh pr list --repo "$REPO" --state open \
             --label merge-stack --base main \
             --json number -q '.[0].number')"
-          if [[ -n "$new_bottom" ]]; then
-            gh pr merge "$new_bottom" --repo "$REPO" --squash --auto
-          else
+          if [[ -z "$new_bottom" ]]; then
             echo "No labeled PR targeting main remains — stack fully merged."
+            exit 0
+          fi
+          # Idempotent: `gh pr merge --auto` returns "Merge already in
+          # progress" if auto-merge is already enabled. Treat that as
+          # success so retries don't fail.
+          if ! out=$(gh pr merge "$new_bottom" --repo "$REPO" --squash --auto 2>&1); then
+            if [[ "$out" == *"Merge already in progress"* ]]; then
+              echo "Auto-merge already enabled on PR #$new_bottom."
+            else
+              echo "$out" >&2
+              exit 1
+            fi
           fi
