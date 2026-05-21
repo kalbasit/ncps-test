@@ -20,10 +20,6 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
-      # git-spice reads GITHUB_TOKEN (see abhinav/git-spice
-      # internal/forge/github/forge.go). Overriding the GHA-built-in
-      # GITHUB_TOKEN with the PAT lets gs auth without `gs auth login`.
-      GITHUB_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
       REPO: ${{ github.repository }}
     steps:
       - name: Compute remaining labeled chain (bottom→top)
@@ -111,70 +107,56 @@ jobs:
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name  "github-actions[bot]"
-      - uses: cachix/install-nix-action@v31
-        if: steps.chain.outputs.found == 'true'
-      - uses: cachix/cachix-action@v17
-        if: steps.chain.outputs.found == 'true'
-        with:
-          name: ncps
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Fetch all labeled branches and trunk locally
-        if: steps.chain.outputs.found == 'true'
-        run: |
-          set -euo pipefail
-          # gs repo init --trunk=main requires `main` to exist as a local
-          # branch; actions/checkout only set up the top labeled branch.
-          git branch -f main origin/main
-
-          # The top branch is already checked out by actions/checkout, which
-          # also sets up its upstream tracking — skip it here. Fetching into
-          # a checked-out branch via the `src:dst` refspec form also fails
-          # with `refusing to fetch into branch ... checked out at ...`.
-          current="$(git branch --show-current)"
-          while IFS=$'\t' read -r head _base; do
-            if [[ "$head" == "$current" ]]; then
-              continue
-            fi
-            git fetch origin "$head:$head"
-            # Set upstream tracking. Without this, `gs stack submit` falls
-            # back to a by-branch-name PR lookup, sees a SHA mismatch after
-            # the rebase, decides the remote was modified elsewhere, and
-            # skips the branch as "unsubmitted" under --update-only.
-            git branch --set-upstream-to="origin/$head" "$head"
-          done < /tmp/chain.tsv
-      - name: Bootstrap gs metadata, restack, submit
+      - name: Rebase remaining stack onto main and force-push
         id: restack
         if: steps.chain.outputs.found == 'true'
         env:
-          TOP_HEAD: ${{ steps.chain.outputs.top_head }}
+          # The merged PR's pre-merge HEAD SHA — this is the cut-point for
+          # rebasing the new bottom: every commit AFTER this in the next
+          # branch is "the new bottom's own work", which we want to replay
+          # onto main (dropping the now-squash-merged ancestor commits).
+          MERGED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Write the restack script to a file so we can invoke it via
-          # `nix develop --command` without nested-quoting headaches.
-          cat > /tmp/restack.sh <<'BASH'
-          #!/usr/bin/env bash
-          set -euo pipefail
 
-          # Wipe any stale git-spice state and re-init against main/origin.
-          gs repo init --trunk=main --remote=origin --reset
+          # Walk the chain bottom→top. For each branch:
+          #   1. Fetch its current remote tip.
+          #   2. `git rebase --onto <new-base> <prev-old-tip>` — this takes
+          #      commits in the current branch that came AFTER prev-old-tip
+          #      and replays them onto new-base. That cleanly drops the
+          #      ancestor branch's pre-squash commits (for the bottom) or
+          #      the previous branch's pre-rebase commits (for the rest).
+          #   3. Force-push with --force-with-lease=<head>:<remote-old-tip>,
+          #      so we only overwrite the remote if it's still at the SHA
+          #      we just fetched (protecting against concurrent pushes).
+          #
+          # Same commits gs would produce; no Nix install needed; doesn't
+          # touch the git-spice navigation comment.
+          prev_old_tip="$MERGED_PR_HEAD_SHA"
+          new_base="main"
+          # main is only on the remote after checkout; create local main.
+          git branch -f main origin/main
+          count=0
+          while IFS=$'\t' read -r head _base; do
+            git fetch --no-tags origin "$head"
+            this_old_tip="$(git rev-parse "refs/remotes/origin/$head")"
 
-          # Re-track each labeled branch with its current (post-auto-retarget)
-          # base, walking bottom→top. gs records the current branch tip as the
-          # fork point for each tracked branch; the subsequent `gs stack
-          # restack` then uses `git rebase --onto <new-base> <fork-point>`,
-          # cleanly dropping pre-squash ancestor commits.
-          while IFS=$'\t' read -r head base; do
-            git checkout "$head"
-            gs branch track --base="$base"
+            # `-B` creates or resets the branch at the given SHA. Works
+            # whether or not the branch already exists locally (the top
+            # one was set up by actions/checkout, the others weren't).
+            git checkout -B "$head" "$this_old_tip"
+
+            git rebase --onto "$new_base" "$prev_old_tip"
+
+            git push --force-with-lease="$head:$this_old_tip" \
+              origin "HEAD:refs/heads/$head"
+
+            prev_old_tip="$this_old_tip"
+            new_base="$head"
+            count=$((count + 1))
           done < /tmp/chain.tsv
 
-          git checkout "$TOP_HEAD"
-          gs repo sync
-          gs stack restack
-          gs stack submit --no-prompt --update-only
-          BASH
-          chmod +x /tmp/restack.sh
-          nix develop --command /tmp/restack.sh
+          echo "Restacked and pushed $count branches."
       - name: On failure — strip labels and comment
         if: failure() && steps.restack.outcome == 'failure'
         env:
@@ -186,7 +168,7 @@ jobs:
           for n in "${nums[@]}"; do
             gh pr edit "$n" --repo "$REPO" --remove-label merge-stack || true
             gh pr comment "$n" --repo "$REPO" --body \
-              "Automated stack merge failed during \`gs stack restack\`. The \`merge-stack\` label has been removed from all PRs in the stack. Please resolve conflicts locally, push, and re-apply the label on the top-most PR to retry. Run: $RUN_URL"
+              "Automated stack merge failed during the rebase step. The \`merge-stack\` label has been removed from all PRs in the stack. Please resolve conflicts locally, push, and re-apply the label on the top-most PR to retry. Run: $RUN_URL"
           done
           exit 1
       - name: Enable auto-merge on new bottom
