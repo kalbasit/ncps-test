@@ -4,12 +4,24 @@
     {
       config,
       pkgs,
+      system,
       ...
     }:
+    let
+      pkgsUnstable = import inputs.nixpkgs-unstable {
+        inherit system;
+        config.allowUnfree = false;
+      };
+    in
     {
       devShells.default = pkgs.mkShell {
         buildInputs =
           (import ../dev-packages.nix pkgs)
+          ++ [
+            # git-spice from nixpkgs-unstable (master) — the stable channel
+            # version lags significantly behind upstream.
+            pkgsUnstable.git-spice
+          ]
           ++ [
             # python environment for dev-scripts.
             (pkgs.python3.withPackages (

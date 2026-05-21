@@ -15,6 +15,10 @@
 
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
 
+    # Used to pull bleeding-edge packages (e.g. git-spice) that lag behind in
+    # the stable channel. Do NOT follow nixpkgs — we want its own pin.
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/master";
+
     process-compose-flake.url = "github:Platonic-Systems/process-compose-flake";
 
     treefmt-nix = {

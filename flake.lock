@@ -113,6 +113,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-unstable": {
+      "locked": {
+        "lastModified": 1779326793,
+        "narHash": "sha256-PIEseW+wMyMYAiwSEOTKSbZOs4W539y+0lBV4BfATpE=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "9d4ceecc846cc0c2b7a0c169da3bd28eb0ec23c8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "master",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "pnpm2nix": {
       "inputs": {
         "flake-utils": [
@@ -159,6 +175,7 @@
         "flake-parts": "flake-parts",
         "git-hooks-nix": "git-hooks-nix",
         "nixpkgs": "nixpkgs",
+        "nixpkgs-unstable": "nixpkgs-unstable",
         "process-compose-flake": "process-compose-flake",
         "treefmt-nix": "treefmt-nix",
         "trilium": "trilium"

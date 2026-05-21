@@ -1,0 +1,167 @@
+name: Merge Stack — Continue
+on:
+  pull_request:
+    types: [closed]
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: merge-stack-continue-${{ github.repository }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  restack-and-advance:
+    name: Restack remaining stack and enable next auto-merge
+    if: >-
+      github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'merge-stack') && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
+      GIT_SPICE_GITHUB_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Compute remaining labeled chain (bottom→top)
+        id: chain
+        run: |
+          set -euo pipefail
+          # Pull all open PRs that still carry the label.
+          gh pr list --repo "$REPO" --state open --label merge-stack \
+            --json number,headRefName,baseRefName \
+            -q '.[] | [.number, .headRefName, .baseRefName] | @tsv' > /tmp/labeled.tsv
+
+          if [[ ! -s /tmp/labeled.tsv ]]; then
+            echo "No remaining merge-stack PRs; nothing to do."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          declare -A num_by_head base_by_head
+          while IFS=$'\t' read -r num head base; do
+            num_by_head[$head]="$num"
+            base_by_head[$head]="$base"
+          done < /tmp/labeled.tsv
+
+          # Bottom = a labeled head whose base is not another labeled head
+          # (i.e. its base is `main` after GitHub's auto-retarget).
+          bottom_head=""
+          for head in "${!num_by_head[@]}"; do
+            base="${base_by_head[$head]}"
+            if [[ -z "${num_by_head[$base]:-}" ]]; then
+              bottom_head="$head"
+              break
+            fi
+          done
+
+          # Walk bottom→top, emitting "<head>\t<base>" per row.
+          : > /tmp/chain.tsv
+          cur="$bottom_head"
+          top_head=""
+          while [[ -n "$cur" ]]; do
+            printf '%s\t%s\n' "$cur" "${base_by_head[$cur]}" >> /tmp/chain.tsv
+            top_head="$cur"
+            next=""
+            for h in "${!num_by_head[@]}"; do
+              if [[ "${base_by_head[$h]}" == "$cur" ]]; then
+                next="$h"
+                break
+              fi
+            done
+            cur="$next"
+          done
+
+          {
+            echo "found=true"
+            echo "top_head=$top_head"
+            echo "bottom_num=${num_by_head[$bottom_head]}"
+          } >> "$GITHUB_OUTPUT"
+          echo "----- chain.tsv -----"
+          cat /tmp/chain.tsv
+      - uses: actions/checkout@v6
+        if: steps.chain.outputs.found == 'true'
+        with:
+          token: ${{ secrets.GHA_PAT_TOKEN }}
+          ref: ${{ steps.chain.outputs.top_head }}
+          fetch-depth: 0
+      - name: Configure git identity
+        if: steps.chain.outputs.found == 'true'
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+      - uses: cachix/install-nix-action@v31
+        if: steps.chain.outputs.found == 'true'
+      - uses: cachix/cachix-action@v17
+        if: steps.chain.outputs.found == 'true'
+        with:
+          name: ncps
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Fetch all labeled branches locally
+        if: steps.chain.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          # actions/checkout wiped /tmp on a fresh runner? No — /tmp survives.
+          while IFS=$'\t' read -r head _base; do
+            # `head:head` creates/updates a local branch at the remote SHA.
+            git fetch origin "$head:$head"
+          done < /tmp/chain.tsv
+      - name: Bootstrap gs metadata, restack, submit
+        id: restack
+        if: steps.chain.outputs.found == 'true'
+        env:
+          TOP_HEAD: ${{ steps.chain.outputs.top_head }}
+        run: |
+          set -euo pipefail
+          # Write the restack script to a file so we can invoke it via
+          # `nix develop --command` without nested-quoting headaches.
+          cat > /tmp/restack.sh <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          # Wipe any stale git-spice state and re-init against main/origin.
+          gs repo init --trunk=main --remote=origin --reset
+
+          # Re-track each labeled branch with its current (post-auto-retarget)
+          # base, walking bottom→top. gs records the current branch tip as the
+          # fork point for each tracked branch; the subsequent `gs stack
+          # restack` then uses `git rebase --onto <new-base> <fork-point>`,
+          # cleanly dropping pre-squash ancestor commits.
+          while IFS=$'\t' read -r head base; do
+            git checkout "$head"
+            gs branch track --base="$base"
+          done < /tmp/chain.tsv
+
+          git checkout "$TOP_HEAD"
+          gs repo sync
+          gs stack restack
+          gs stack submit --no-prompt --update-only
+          BASH
+          chmod +x /tmp/restack.sh
+          nix develop --command /tmp/restack.sh
+      - name: On failure — strip labels and comment
+        if: failure() && steps.restack.outcome == 'failure'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mapfile -t nums < <(gh pr list --repo "$REPO" --state open \
+            --label merge-stack --json number -q '.[].number')
+          for n in "${nums[@]}"; do
+            gh pr edit "$n" --repo "$REPO" --remove-label merge-stack || true
+            gh pr comment "$n" --repo "$REPO" --body \
+              "Automated stack merge failed during \`gs stack restack\`. The \`merge-stack\` label has been removed from all PRs in the stack. Please resolve conflicts locally, push, and re-apply the label on the top-most PR to retry. Run: $RUN_URL"
+          done
+          exit 1
+      - name: Enable auto-merge on new bottom
+        if: success() && steps.chain.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          new_bottom="$(gh pr list --repo "$REPO" --state open \
+            --label merge-stack --base main \
+            --json number -q '.[0].number')"
+          if [[ -n "$new_bottom" ]]; then
+            gh pr merge "$new_bottom" --repo "$REPO" --squash --auto
+          else
+            echo "No labeled PR targeting main remains — stack fully merged."
+          fi
