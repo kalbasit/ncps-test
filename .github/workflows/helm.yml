@@ -32,19 +32,3 @@ jobs:
             --app-version "$APP_VER"
 
           echo "📦 Packaged Chart v$CHART_VER with App Version $APP_VER"
-      - name: Login to GitHub Container Registry
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-      - name: Push chart to GHCR
-        run: |
-          CHART_VER="${{ github.ref_name }}"
-          CHART_PACKAGE="ncps-${CHART_VER}.tgz"
-
-          # Push to OCI registry
-          helm push .helm-releases/${CHART_PACKAGE} oci://ghcr.io/${{ github.repository_owner }}/helm
-
-          echo "✅ Chart published to: oci://ghcr.io/${{ github.repository_owner }}/helm/ncps:${CHART_VER}"
-      - name: Logout from GHCR
-        if: always()
-        run: |
-          helm registry logout ghcr.io
