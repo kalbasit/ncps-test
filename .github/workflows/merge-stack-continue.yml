@@ -115,10 +115,14 @@ jobs:
         with:
           name: ncps
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Fetch all labeled branches locally
+      - name: Fetch all labeled branches and trunk locally
         if: steps.chain.outputs.found == 'true'
         run: |
           set -euo pipefail
+          # gs repo init --trunk=main requires `main` to exist as a local
+          # branch; actions/checkout only set up `chore-44` (the top).
+          git branch -f main origin/main
+
           # The top branch is already checked out by actions/checkout and is
           # therefore at the right SHA — skip it. Fetching into a checked-out
           # branch via the `src:dst` refspec form fails with `refusing to
