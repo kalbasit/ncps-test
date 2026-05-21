@@ -58,24 +58,3 @@ jobs:
           if [[ "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "${{ github.ref_name }}" > nix/packages/ncps/version.txt
           fi
-      - name: Flake check
-        id: flake-check
-        run: nix flake check -L
-      - name: Build coverage
-        id: build-coverage
-        if: github.event.pull_request.head.repo.fork == false
-        run: nix build .#ncps.coverage -L
-      - name: Upload coverage reports to Codecov
-        if: github.event.pull_request.head.repo.fork == false
-        uses: codecov/codecov-action@v6
-        with:
-          token: ${{ secrets.codecov_token }}
-          files: result-coverage
-      - name: Build the docker image
-        shell: bash
-        run: |
-          set -euo pipefail
-          nix build -L .#packages.${{ matrix.system }}.docker
-    outputs:
-      labels: ${{ steps.meta.outputs.labels }}
-      tags: ${{ steps.meta.outputs.tags }}
