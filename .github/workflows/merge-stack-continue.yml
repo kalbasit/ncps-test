@@ -18,6 +18,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: kalbasit/stackmerge-action/continue@user/wnasreddine/git-spice-stack-merge-workflow
+      - uses: kalbasit/stackmerge-action/continue@gs-comments-1-4
         with:
           token: ${{ secrets.GHA_PAT_TOKEN }}
