@@ -20,7 +20,10 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
-      GIT_SPICE_GITHUB_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
+      # git-spice reads GITHUB_TOKEN (see abhinav/git-spice
+      # internal/forge/github/forge.go). Overriding the GHA-built-in
+      # GITHUB_TOKEN with the PAT lets gs auth without `gs auth login`.
+      GITHUB_TOKEN: ${{ secrets.GHA_PAT_TOKEN }}
       REPO: ${{ github.repository }}
     steps:
       - name: Compute remaining labeled chain (bottom→top)
