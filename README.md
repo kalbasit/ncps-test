@@ -72,13 +72,13 @@ Your cache will be available at `http://localhost:8501`. See the [Quick Start Gu
 
 ## Installation Methods
 
-| Method | Best For | Documentation |
+| Method             | Best For                              | Documentation                                                                             |
 | ------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **Docker** | Quick setup, single-instance | [Docker Guide](https://docs.ncps.dev/user-guide/installation/docker.html) |
-| **Docker Compose** | Automated setup with dependencies | [Docker Compose Guide](https://docs.ncps.dev/user-guide/installation/docker-compose.html) |
-| **Kubernetes** | Production, manual K8s deployment | [Kubernetes Guide](https://docs.ncps.dev/user-guide/installation/kubernetes.html) |
-| **Helm Chart** | Production, simplified K8s management | [Helm Guide](https://docs.ncps.dev/user-guide/installation/helm-chart.html) |
-| **NixOS** | NixOS systems with native integration | [NixOS Guide](https://docs.ncps.dev/user-guide/installation/nixos.html) |
+| **Docker**         | Quick setup, single-instance          | [Docker Guide](https://docs.ncps.dev/user-guide/installation/docker.html)                 |
+| **Docker Compose** | Automated setup with dependencies     | [Docker Compose Guide](https://docs.ncps.dev/user-guide/installation/docker-compose.html) |
+| **Kubernetes**     | Production, manual K8s deployment     | [Kubernetes Guide](https://docs.ncps.dev/user-guide/installation/kubernetes.html)         |
+| **Helm Chart**     | Production, simplified K8s management | [Helm Guide](https://docs.ncps.dev/user-guide/installation/helm-chart.html)               |
+| **NixOS**          | NixOS systems with native integration | [NixOS Guide](https://docs.ncps.dev/user-guide/installation/nixos.html)                   |
 
 ## Deployment Modes
 
@@ -107,11 +107,6 @@ See the [Developer Guide](https://docs.ncps.dev/developer-guide.html) for:
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
-______________________________________________________________________
+---
 
 [Report Bug](https://github.com/kalbasit/ncps/issues) • [Request Feature](https://github.com/kalbasit/ncps/issues) • [Discussions](https://github.com/kalbasit/ncps/discussions) • [Sponsor](https://github.com/sponsors/kalbasit)
-200
-201
-202
-203
-204
