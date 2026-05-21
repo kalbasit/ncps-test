@@ -123,19 +123,24 @@ jobs:
         run: |
           set -euo pipefail
           # gs repo init --trunk=main requires `main` to exist as a local
-          # branch; actions/checkout only set up `chore-44` (the top).
+          # branch; actions/checkout only set up the top labeled branch.
           git branch -f main origin/main
 
-          # The top branch is already checked out by actions/checkout and is
-          # therefore at the right SHA — skip it. Fetching into a checked-out
-          # branch via the `src:dst` refspec form fails with `refusing to
-          # fetch into branch ... checked out at ...`.
+          # The top branch is already checked out by actions/checkout, which
+          # also sets up its upstream tracking — skip it here. Fetching into
+          # a checked-out branch via the `src:dst` refspec form also fails
+          # with `refusing to fetch into branch ... checked out at ...`.
           current="$(git branch --show-current)"
           while IFS=$'\t' read -r head _base; do
             if [[ "$head" == "$current" ]]; then
               continue
             fi
             git fetch origin "$head:$head"
+            # Set upstream tracking. Without this, `gs stack submit` falls
+            # back to a by-branch-name PR lookup, sees a SHA mismatch after
+            # the rebase, decides the remote was modified elsewhere, and
+            # skips the branch as "unsubmitted" under --update-only.
+            git branch --set-upstream-to="origin/$head" "$head"
           done < /tmp/chain.tsv
       - name: Bootstrap gs metadata, restack, submit
         id: restack
