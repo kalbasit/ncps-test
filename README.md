@@ -110,9 +110,3 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 ______________________________________________________________________
 
 [Report Bug](https://github.com/kalbasit/ncps/issues) • [Request Feature](https://github.com/kalbasit/ncps/issues) • [Discussions](https://github.com/kalbasit/ncps/discussions) • [Sponsor](https://github.com/sponsors/kalbasit)
-1010
-1011
-1012
-1013
-1014
-1015
