@@ -21,6 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: kalbasit/stackmerge-action/start@gs-comments-1-4
+      - uses: kalbasit/stackmerge-action/start@main
         with:
           token: ${{ secrets.GHA_PAT_TOKEN }}
